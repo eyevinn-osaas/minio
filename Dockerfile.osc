@@ -30,9 +30,13 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
 RUN minisign -Vqm /go/bin/minio -x /go/bin/minio.minisig -P RWTx5Zr1tiHQLwG9keckT0c45M3AGeHD6IvimQHpyRywVWGbP1aVSGav && \
     minisign -Vqm /go/bin/mc -x /go/bin/mc.minisig -P RWTx5Zr1tiHQLwG9keckT0c45M3AGeHD6IvimQHpyRywVWGbP1aVSGav
 
-FROM registry.access.redhat.com/ubi9/ubi-micro:latest
+FROM registry.access.redhat.com/ubi9/ubi:latest
 
 ARG RELEASE
+
+# Install nginx
+RUN dnf install -y nginx && \
+    dnf clean all
 
 LABEL name="MinIO" \
       vendor="MinIO Inc <dev@min.io>" \
@@ -49,7 +53,8 @@ ENV MINIO_ACCESS_KEY_FILE=access_key \
     MINIO_KMS_SECRET_KEY_FILE=kms_master_key \
     MINIO_UPDATE_MINISIGN_PUBKEY="RWTx5Zr1tiHQLwG9keckT0c45M3AGeHD6IvimQHpyRywVWGbP1aVSGav" \
     MINIO_CONFIG_ENV_FILE=config.env \
-    MC_CONFIG_DIR=/tmp/.mc
+    MC_CONFIG_DIR=/tmp/.mc \
+    PORT=8080
 
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=build /go/bin/minio /usr/bin/minio
@@ -58,10 +63,14 @@ COPY --from=build /go/bin/cur* /usr/bin/
 
 COPY CREDITS /licenses/CREDITS
 COPY LICENSE /licenses/LICENSE
-COPY dockerscripts/docker-entrypoint.sh /usr/bin/docker-entrypoint.sh
+COPY dockerscripts/docker-entrypoint-osc.sh /usr/bin/docker-entrypoint.sh
+COPY nginx.conf.template /etc/nginx/nginx.conf.template
 
-EXPOSE 8080
+# Make entrypoint script executable
+RUN chmod +x /usr/bin/docker-entrypoint.sh
+
+EXPOSE $PORT
 VOLUME ["/data"]
 
 ENTRYPOINT ["/usr/bin/docker-entrypoint.sh"]
-CMD ["minio", "server", "--address", "0.0.0.0:8080", "/data"]
+CMD ["minio", "server", "--address", "0.0.0.0:9000", "--console-address", "0.0.0.0:9001", "/data"]
