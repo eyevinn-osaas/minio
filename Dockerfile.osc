@@ -1,34 +1,32 @@
-FROM golang:1.21-alpine as build
+FROM golang:1.24.8-alpine as build
 
 ARG TARGETARCH
-ARG RELEASE=RELEASE.2025-06-13T11-33-47Z
+ARG RELEASE=RELEASE.2025-10-15T17-29-55Z
+ARG MINIO_COMMIT=9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a
 
 ENV GOPATH /go
 ENV CGO_ENABLED 0
 
-# Install curl and minisign
+# Install curl and git
 RUN apk add -U --no-cache ca-certificates && \
-    apk add -U --no-cache curl && \
-    go install aead.dev/minisign/cmd/minisign@v0.2.1
+    apk add -U --no-cache curl git
 
-# Download minio binary and signature file
-RUN curl -s -q https://dl.min.io/server/minio/release/linux-${TARGETARCH}/archive/minio.${RELEASE} -o /go/bin/minio && \
-    curl -s -q https://dl.min.io/server/minio/release/linux-${TARGETARCH}/archive/minio.${RELEASE}.minisig -o /go/bin/minio.minisig && \
-    chmod +x /go/bin/minio
+# The upstream binary download host returns 410 Gone, so build from source
+# at the commit of tag ${RELEASE}. A .git directory is required because
+# buildscripts/gen-ldflags.go derives commit id and version from git log.
+WORKDIR /src
+RUN git init -q . && \
+    git fetch -q --depth=1 https://github.com/eyevinn-osaas/minio.git ${MINIO_COMMIT} && \
+    git checkout -q FETCH_HEAD && \
+    test "$(git rev-parse HEAD)" = "${MINIO_COMMIT}"
 
-# Download mc binary and signature file
-RUN curl -s -q https://dl.min.io/client/mc/release/linux-${TARGETARCH}/mc -o /go/bin/mc && \
-    curl -s -q https://dl.min.io/client/mc/release/linux-${TARGETARCH}/mc.minisig -o /go/bin/mc.minisig && \
-    chmod +x /go/bin/mc
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -tags kqueue -trimpath \
+      --ldflags "$(MINIO_RELEASE=RELEASE go run buildscripts/gen-ldflags.go)" -o /go/bin/minio
 
 RUN if [ "$TARGETARCH" = "amd64" ]; then \
        curl -L -s -q https://github.com/moparisthebest/static-curl/releases/latest/download/curl-${TARGETARCH} -o /go/bin/curl; \
        chmod +x /go/bin/curl; \
     fi
-
-# Verify binary signature using public key "RWTx5Zr1tiHQLwG9keckT0c45M3AGeHD6IvimQHpyRywVWGbP1aVSGavRUN"
-RUN minisign -Vqm /go/bin/minio -x /go/bin/minio.minisig -P RWTx5Zr1tiHQLwG9keckT0c45M3AGeHD6IvimQHpyRywVWGbP1aVSGav && \
-    minisign -Vqm /go/bin/mc -x /go/bin/mc.minisig -P RWTx5Zr1tiHQLwG9keckT0c45M3AGeHD6IvimQHpyRywVWGbP1aVSGav
 
 FROM registry.access.redhat.com/ubi9/ubi:latest
 
@@ -58,7 +56,6 @@ ENV MINIO_ACCESS_KEY_FILE=access_key \
 
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=build /go/bin/minio /usr/bin/minio
-COPY --from=build /go/bin/mc /usr/bin/mc
 COPY --from=build /go/bin/cur* /usr/bin/
 
 COPY CREDITS /licenses/CREDITS
